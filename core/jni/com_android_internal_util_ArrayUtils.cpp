@@ -50,6 +50,9 @@ static void CleanCacheLineContainingAddress(const uint8_t* p) {
     //  2.) Kernel needs to enable zicbom in usermode.
     //  3.) Android clang needs to add zicbom to the target.
     // asm volatile("cbo.clean (%0)" ::"r"(p));
+#elif defined(__loongarch__)
+    // LoongArch does not provide an unprivileged cache-maintenance instruction or a cacheflush
+    // syscall that can clean a data cache line to the point of coherency.
 #elif defined(__arm__)
     // arm32 has a cacheflush() syscall, but it is undocumented and only flushes the icache.
     // It is not the same as cacheflush(2) as documented in the Linux man-pages project.
