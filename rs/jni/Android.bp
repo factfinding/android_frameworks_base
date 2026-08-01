@@ -57,5 +57,8 @@ cc_library_shared {
         android_riscv64: {
             enabled: false,
         },
+        android_loongarch64: {
+            enabled: false,
+        },
     },
 }
