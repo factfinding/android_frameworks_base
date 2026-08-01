@@ -416,7 +416,8 @@ status_t ReportFile::startFilteringData(int writeFd, const IncidentReportArgs& a
     if (st.st_size != mEnvelope.data_file_size()) {
         ALOGW("File size mismatch. Envelope says %" PRIi64 " bytes but data file is %" PRIi64
               " bytes: %s",
-              (int64_t)mEnvelope.data_file_size(), st.st_size, mDataFileName.c_str());
+              (int64_t)mEnvelope.data_file_size(), static_cast<int64_t>(st.st_size),
+              mDataFileName.c_str());
         ALOGW("Removing incident report");
         mWorkDirectory->remove(this);
         close(writeFd);
@@ -872,4 +873,3 @@ void get_args_from_report(IncidentReportArgs* out, const ReportFileProto_Report&
 }  // namespace incidentd
 }  // namespace os
 }  // namespace android
-
