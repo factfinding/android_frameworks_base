@@ -701,9 +701,9 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     char dex2oatThreadsImageBuf[sizeof("-j")-1 + PROPERTY_VALUE_MAX];
     char dex2oatCpuSetBuf[sizeof("--cpu-set=")-1 + PROPERTY_VALUE_MAX];
     char dex2oatCpuSetImageBuf[sizeof("--cpu-set=")-1 + PROPERTY_VALUE_MAX];
-    char dex2oat_isa_variant_key[PROPERTY_KEY_MAX];
+    const char dex2oat_isa_variant_key[] = "dalvik.vm.isa." ABI_STRING ".variant";
     char dex2oat_isa_variant[sizeof("--instruction-set-variant=") -1 + PROPERTY_VALUE_MAX];
-    char dex2oat_isa_features_key[PROPERTY_KEY_MAX];
+    const char dex2oat_isa_features_key[] = "dalvik.vm.isa." ABI_STRING ".features";
     char dex2oat_isa_features[sizeof("--instruction-set-features=") -1 + PROPERTY_VALUE_MAX];
     char dex2oatFlagsBuf[PROPERTY_VALUE_MAX];
     char dex2oatImageFlagsBuf[PROPERTY_VALUE_MAX];
@@ -1007,12 +1007,8 @@ int AndroidRuntime::startVm(JavaVM** pJavaVM, JNIEnv** pEnv, bool zygote, bool p
     parseCompilerOption("dalvik.vm.dex2oat-cpu-set", dex2oatCpuSetBuf, "--cpu-set=",
                         "-Xcompiler-option");
 
-    // Copy the variant.
-    sprintf(dex2oat_isa_variant_key, "dalvik.vm.isa.%s.variant", ABI_STRING);
     parseCompilerOption(dex2oat_isa_variant_key, dex2oat_isa_variant,
                         "--instruction-set-variant=", "-Xcompiler-option");
-    // Copy the features.
-    sprintf(dex2oat_isa_features_key, "dalvik.vm.isa.%s.features", ABI_STRING);
     parseCompilerOption(dex2oat_isa_features_key, dex2oat_isa_features,
                         "--instruction-set-features=", "-Xcompiler-option");
 
