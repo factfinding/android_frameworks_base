@@ -386,9 +386,15 @@ final class PackageAbiHelperImpl implements PackageAbiHelper {
                 // Force the match for these cases
                 // 1. pkg.getTargetSdkVersion >= Build.VERSION_CODES.VANILLA_ICE_CREAM
                 // 2. cpuAbiOverride is null. If it is non-null, it is set via shell for testing
+                // A native bridge can execute an ABI that is not native to the device. In that
+                // case forcing a multiArch package to contain host-architecture libraries rejects
+                // valid guest-only packages (for example an arm64 GmsCore on LoongArch64). Use the
+                // complete advertised ABI list so NativeLibraryHelper can select the guest ABI.
+                final boolean hasNativeBridge = !TextUtils.isEmpty(
+                        SystemProperties.get("ro.dalvik.vm.native.bridge"));
                 final boolean forceMatch =
                         pkg.getTargetSdkVersion() >= Build.VERSION_CODES.VANILLA_ICE_CREAM
-                        && cpuAbiOverride == null;
+                        && cpuAbiOverride == null && !hasNativeBridge;
 
                 String[] supported32BitAbis = forceMatch ? getNativelySupported32BitAbis()
                         : Build.SUPPORTED_32_BIT_ABIS;
