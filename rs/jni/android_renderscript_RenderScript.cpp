@@ -22,32 +22,44 @@
 #include <unistd.h>
 #include <math.h>
 #include <utils/misc.h>
+#include <assert.h>
 #include <inttypes.h>
+#include <string.h>
 
 #include <android-base/macros.h>
+#include <log/log.h>
+#if defined(RS_NATIVE_BRIDGE)
+#include <android/bitmap.h>
+#else
 #include <androidfw/Asset.h>
 #include <androidfw/AssetManager2.h>
 #include <androidfw/ResourceTypes.h>
-#include <android-base/macros.h>
+#endif
 
 #include "jni.h"
+#if !defined(RS_NATIVE_BRIDGE)
 #include <android/graphics/bitmap.h>
 #include "android_runtime/AndroidRuntime.h"
 #include "android_runtime/android_view_Surface.h"
 #include "android_runtime/android_util_AssetManager.h"
+#endif
 #include "android/native_window.h"
 #include "android/native_window_jni.h"
 
 #include <rsEnv.h>
 #include <rsApiStubs.h>
+#if !defined(RS_NATIVE_BRIDGE)
 #include <gui/Surface.h>
 #include <gui/GLConsumer.h>
 #include <android_runtime/android_graphics_SurfaceTexture.h>
+#endif
 
 //#define LOG_API ALOGE
 static constexpr bool kLogApi = false;
 
+#if !defined(RS_NATIVE_BRIDGE)
 using namespace android;
+#endif
 
 #define PER_ARRAY_TYPE(flag, fnc, readonly, ...) {                                      \
     jint len = 0;                                                                       \
@@ -908,18 +920,25 @@ static void
 nContextSetSurface(JNIEnv *_env, jobject _this, jlong con, jint width, jint height, jobject wnd)
 {
     if (kLogApi) {
-        ALOGD("nContextSetSurface, con(%p), width(%i), height(%i), surface(%p)", (RsContext)con,
-              width, height, (Surface *)wnd);
+        ALOGD("nContextSetSurface, con(%p), width(%i), height(%i), surface(%p)",
+              (RsContext)con, width, height, wnd);
     }
 
     ANativeWindow * window = nullptr;
-    if (wnd == nullptr) {
-
-    } else {
+    if (wnd != nullptr) {
+#if defined(RS_NATIVE_BRIDGE)
+        window = ANativeWindow_fromSurface(_env, wnd);
+#else
         window = android_view_Surface_getNativeWindow(_env, wnd).get();
+#endif
     }
 
     rsContextSetSurface((RsContext)con, width, height, window);
+#if defined(RS_NATIVE_BRIDGE)
+    if (window != nullptr) {
+        ANativeWindow_release(window);
+    }
+#endif
 }
 
 static void
@@ -1264,31 +1283,45 @@ nAllocationGetSurface(JNIEnv *_env, jobject _this, jlong con, jlong a)
         ALOGD("nAllocationGetSurface, con(%p), a(%p)", (RsContext)con, (RsAllocation)a);
     }
 
+#if defined(RS_NATIVE_BRIDGE)
+    // Creating a Java Surface from a guest ANativeWindow would require passing
+    // private libgui objects across the native-bridge boundary.  RenderScript
+    // compute and bitmap intrinsics do not use this legacy graphics API.
+    ALOGE("Allocation.getSurface() is unsupported through the native bridge");
+    return nullptr;
+#else
     ANativeWindow *anw = (ANativeWindow *)rsAllocationGetSurface((RsContext)con, (RsAllocation)a);
-
     sp<Surface> surface(static_cast<Surface*>(anw));
     sp<IGraphicBufferProducer> bp = surface->getIGraphicBufferProducer();
 
     jobject o = android_view_Surface_createFromIGraphicBufferProducer(_env, bp);
     return o;
+#endif
 }
 
 static void
 nAllocationSetSurface(JNIEnv *_env, jobject _this, jlong con, jlong alloc, jobject sur)
 {
     if (kLogApi) {
-        ALOGD("nAllocationSetSurface, con(%p), alloc(%p), surface(%p)", (RsContext)con,
-              (RsAllocation)alloc, (Surface *)sur);
+        ALOGD("nAllocationSetSurface, con(%p), alloc(%p), surface(%p)",
+              (RsContext)con, (RsAllocation)alloc, sur);
     }
 
     ANativeWindow *anw = nullptr;
     if (sur != 0) {
         // Connect the native window handle to buffer queue.
         anw = ANativeWindow_fromSurface(_env, sur);
+#if !defined(RS_NATIVE_BRIDGE)
         native_window_api_connect(anw, NATIVE_WINDOW_API_CPU);
+#endif
     }
 
     rsAllocationSetSurface((RsContext)con, (RsAllocation)alloc, anw);
+#if defined(RS_NATIVE_BRIDGE)
+    if (anw != nullptr) {
+        ANativeWindow_release(anw);
+    }
+#endif
 }
 
 static void
@@ -1318,20 +1351,42 @@ nAllocationGenerateMipmaps(JNIEnv *_env, jobject _this, jlong con, jlong alloc)
     rsAllocationGenerateMipmaps((RsContext)con, (RsAllocation)alloc);
 }
 
+#if defined(RS_NATIVE_BRIDGE)
+static size_t computeByteSize(JNIEnv* env, jobject bitmap) {
+    AndroidBitmapInfo info = {};
+    if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS) {
+        return 0;
+    }
+    return info.height * info.stride;
+}
+#else
 static size_t computeByteSize(const android::graphics::Bitmap& bitmap) {
     AndroidBitmapInfo info = bitmap.getInfo();
     return info.height * info.stride;
 }
+#endif
 
 static jlong
 nAllocationCreateFromBitmap(JNIEnv *_env, jobject _this, jlong con, jlong type, jint mip,
                             jobject jbitmap, jint usage)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    void* ptr = nullptr;
+    if (AndroidBitmap_lockPixels(_env, jbitmap, &ptr) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        ptr == nullptr) {
+        return 0;
+    }
+    jlong id = (jlong)(uintptr_t)rsAllocationCreateFromBitmap(
+            (RsContext)con, (RsType)type, (RsAllocationMipmapControl)mip,
+            ptr, computeByteSize(_env, jbitmap), usage);
+    AndroidBitmap_unlockPixels(_env, jbitmap);
+#else
     android::graphics::Bitmap bitmap(_env, jbitmap);
     const void* ptr = bitmap.getPixels();
     jlong id = (jlong)(uintptr_t)rsAllocationCreateFromBitmap((RsContext)con,
                                                   (RsType)type, (RsAllocationMipmapControl)mip,
                                                   ptr, computeByteSize(bitmap), usage);
+#endif
     return id;
 }
 
@@ -1339,11 +1394,23 @@ static jlong
 nAllocationCreateBitmapBackedAllocation(JNIEnv *_env, jobject _this, jlong con, jlong type,
                                         jint mip, jobject jbitmap, jint usage)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    void* ptr = nullptr;
+    if (AndroidBitmap_lockPixels(_env, jbitmap, &ptr) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        ptr == nullptr) {
+        return 0;
+    }
+    jlong id = (jlong)(uintptr_t)rsAllocationCreateTyped(
+            (RsContext)con, (RsType)type, (RsAllocationMipmapControl)mip,
+            (uint32_t)usage, (uintptr_t)ptr);
+    AndroidBitmap_unlockPixels(_env, jbitmap);
+#else
     android::graphics::Bitmap bitmap(_env, jbitmap);
     const void* ptr = bitmap.getPixels();
     jlong id = (jlong)(uintptr_t)rsAllocationCreateTyped((RsContext)con,
                                             (RsType)type, (RsAllocationMipmapControl)mip,
                                             (uint32_t)usage, (uintptr_t)ptr);
+#endif
     return id;
 }
 
@@ -1351,17 +1418,42 @@ static jlong
 nAllocationCubeCreateFromBitmap(JNIEnv *_env, jobject _this, jlong con, jlong type, jint mip,
                                 jobject jbitmap, jint usage)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    void* ptr = nullptr;
+    if (AndroidBitmap_lockPixels(_env, jbitmap, &ptr) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        ptr == nullptr) {
+        return 0;
+    }
+    jlong id = (jlong)(uintptr_t)rsAllocationCubeCreateFromBitmap(
+            (RsContext)con, (RsType)type, (RsAllocationMipmapControl)mip,
+            ptr, computeByteSize(_env, jbitmap), usage);
+    AndroidBitmap_unlockPixels(_env, jbitmap);
+#else
     android::graphics::Bitmap bitmap(_env, jbitmap);
     const void* ptr = bitmap.getPixels();
     jlong id = (jlong)(uintptr_t)rsAllocationCubeCreateFromBitmap((RsContext)con,
                                                       (RsType)type, (RsAllocationMipmapControl)mip,
                                                       ptr, computeByteSize(bitmap), usage);
+#endif
     return id;
 }
 
 static void
 nAllocationCopyFromBitmap(JNIEnv *_env, jobject _this, jlong con, jlong alloc, jobject jbitmap)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    AndroidBitmapInfo info = {};
+    void* ptr = nullptr;
+    if (AndroidBitmap_getInfo(_env, jbitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        AndroidBitmap_lockPixels(_env, jbitmap, &ptr) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        ptr == nullptr) {
+        return;
+    }
+    rsAllocation2DData((RsContext)con, (RsAllocation)alloc, 0, 0,
+                       0, RS_ALLOCATION_CUBEMAP_FACE_POSITIVE_X,
+                       info.width, info.height, ptr, computeByteSize(_env, jbitmap), 0);
+    AndroidBitmap_unlockPixels(_env, jbitmap);
+#else
     android::graphics::Bitmap bitmap(_env, jbitmap);
     int w = bitmap.getInfo().width;
     int h = bitmap.getInfo().height;
@@ -1370,15 +1462,27 @@ nAllocationCopyFromBitmap(JNIEnv *_env, jobject _this, jlong con, jlong alloc, j
     rsAllocation2DData((RsContext)con, (RsAllocation)alloc, 0, 0,
                        0, RS_ALLOCATION_CUBEMAP_FACE_POSITIVE_X,
                        w, h, ptr, computeByteSize(bitmap), 0);
+#endif
 }
 
 static void
 nAllocationCopyToBitmap(JNIEnv *_env, jobject _this, jlong con, jlong alloc, jobject jbitmap)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    void* ptr = nullptr;
+    if (AndroidBitmap_lockPixels(_env, jbitmap, &ptr) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        ptr == nullptr) {
+        return;
+    }
+    rsAllocationCopyToBitmap((RsContext)con, (RsAllocation)alloc,
+                             ptr, computeByteSize(_env, jbitmap));
+    AndroidBitmap_unlockPixels(_env, jbitmap);
+#else
     android::graphics::Bitmap bitmap(_env, jbitmap);
     void* ptr = bitmap.getPixels();
     rsAllocationCopyToBitmap((RsContext)con, (RsAllocation)alloc, ptr, computeByteSize(bitmap));
     bitmap.notifyPixelsChanged();
+#endif
 }
 
 // Copies from the Java object data into the Allocation pointed to by _alloc.
@@ -1650,16 +1754,25 @@ nAllocationAdapterOffset(JNIEnv *_env, jobject _this, jlong con, jlong alloc,
 static jlong
 nFileA3DCreateFromAssetStream(JNIEnv *_env, jobject _this, jlong con, jlong native_asset)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    ALOGE("FileA3D asset streams are unsupported through the native bridge");
+    return 0;
+#else
     Asset* asset = reinterpret_cast<Asset*>(native_asset);
     ALOGV("______nFileA3D %p", asset);
 
     jlong id = (jlong)(uintptr_t)rsaFileA3DCreateFromMemory((RsContext)con, asset->getBuffer(false), asset->getLength());
     return id;
+#endif
 }
 
 static jlong
 nFileA3DCreateFromAsset(JNIEnv *_env, jobject _this, jlong con, jobject _assetMgr, jstring _path)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    ALOGE("FileA3D assets are unsupported through the native bridge");
+    return 0;
+#else
     Guarded<AssetManager2>* mgr = AssetManagerForJavaObject(_env, _assetMgr);
     if (mgr == nullptr) {
         return 0;
@@ -1677,6 +1790,7 @@ nFileA3DCreateFromAsset(JNIEnv *_env, jobject _this, jlong con, jobject _assetMg
 
     jlong id = (jlong)(uintptr_t)rsaFileA3DCreateFromAsset((RsContext)con, asset.release());
     return id;
+#endif
 }
 
 static jlong
@@ -1738,6 +1852,10 @@ static jlong
 nFontCreateFromAssetStream(JNIEnv *_env, jobject _this, jlong con,
                            jstring name, jfloat fontSize, jint dpi, jlong native_asset)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    ALOGE("RenderScript font asset streams are unsupported through the native bridge");
+    return 0;
+#else
     Asset* asset = reinterpret_cast<Asset*>(native_asset);
     AutoJavaStringToUTF8 nameUTF(_env, name);
 
@@ -1746,12 +1864,17 @@ nFontCreateFromAssetStream(JNIEnv *_env, jobject _this, jlong con,
                                            fontSize, dpi,
                                            asset->getBuffer(false), asset->getLength());
     return id;
+#endif
 }
 
 static jlong
 nFontCreateFromAsset(JNIEnv *_env, jobject _this, jlong con, jobject _assetMgr, jstring _path,
                      jfloat fontSize, jint dpi)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    ALOGE("RenderScript font assets are unsupported through the native bridge");
+    return 0;
+#else
     Guarded<AssetManager2>* mgr = AssetManagerForJavaObject(_env, _assetMgr);
     if (mgr == nullptr) {
         return 0;
@@ -1772,6 +1895,7 @@ nFontCreateFromAsset(JNIEnv *_env, jobject _this, jlong con, jobject _assetMgr, 
                                            fontSize, dpi,
                                            asset->getBuffer(false), asset->getLength());
     return id;
+#endif
 }
 
 // -----------------------------------
@@ -2965,8 +3089,18 @@ static const JNINativeMethod methods[] = {
 
 static int registerFuncs(JNIEnv *_env)
 {
+#if defined(RS_NATIVE_BRIDGE)
+    jclass clazz = _env->FindClass(classPathName);
+    if (clazz == nullptr) {
+        return -1;
+    }
+    int result = _env->RegisterNatives(clazz, methods, NELEM(methods));
+    _env->DeleteLocalRef(clazz);
+    return result;
+#else
     return android::AndroidRuntime::registerNativeMethods(
             _env, classPathName, methods, NELEM(methods));
+#endif
 }
 
 // ---------------------------------------------------------------------------

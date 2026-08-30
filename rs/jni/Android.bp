@@ -21,6 +21,7 @@ package {
 
 cc_library_shared {
     name: "librs_jni",
+    native_bridge_supported: true,
 
     cpp_std: "gnu++2b",
     srcs: ["android_renderscript_RenderScript.cpp"],
@@ -54,6 +55,26 @@ cc_library_shared {
     ],
 
     target: {
+        native_bridge: {
+            cflags: ["-DRS_NATIVE_BRIDGE"],
+            header_libs: [
+                "libnativewindow_headers",
+                "libarect_headers",
+            ],
+            exclude_shared_libs: [
+                "libandroid",
+                "libandroid_runtime",
+                "libandroidfw",
+                "libhwui",
+                "libui",
+                "libgui",
+                "libjnigraphics",
+            ],
+            shared_libs: [
+                "libnative_bridge_guest_libandroid",
+                "libnative_bridge_guest_libjnigraphics",
+            ],
+        },
         android_riscv64: {
             enabled: false,
         },

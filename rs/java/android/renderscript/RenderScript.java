@@ -78,6 +78,62 @@ public class RenderScript {
     static Method registerNativeAllocation;
     static Method registerNativeFree;
 
+    private static void loadNativeBridgeLibrary(String path, ClassLoader loader) {
+        try {
+            Method nativeLoad = Runtime.class.getDeclaredMethod(
+                    "nativeLoad", String.class, ClassLoader.class);
+            nativeLoad.setAccessible(true);
+            String error = (String) nativeLoad.invoke(null, path, loader);
+            if (error != null) {
+                throw new UnsatisfiedLinkError(error);
+            }
+        } catch (ReflectiveOperationException e) {
+            UnsatisfiedLinkError error =
+                    new UnsatisfiedLinkError("Unable to call Runtime.nativeLoad: " + e);
+            error.initCause(e);
+            throw error;
+        }
+    }
+
+    private static synchronized void initializeRuntime(
+            String nativeBridgeLibrary, ClassLoader loader) {
+        if (sInitialized) {
+            return;
+        }
+        try {
+            Class<?> vm_runtime = Class.forName("dalvik.system.VMRuntime");
+            Method get_runtime = vm_runtime.getDeclaredMethod("getRuntime");
+            sRuntime = get_runtime.invoke(null);
+            registerNativeAllocation =
+                    vm_runtime.getDeclaredMethod("registerNativeAllocation", Long.TYPE);
+            registerNativeFree = vm_runtime.getDeclaredMethod("registerNativeFree", Long.TYPE);
+        } catch (Exception e) {
+            Log.e(LOG_TAG, "Error loading GC methods: " + e);
+            throw new RSRuntimeException("Error loading GC methods: " + e);
+        }
+        try {
+            if (nativeBridgeLibrary == null) {
+                System.loadLibrary("rs_jni");
+            } else {
+                loadNativeBridgeLibrary(nativeBridgeLibrary, loader);
+            }
+            _nInit();
+            sInitialized = true;
+            sPointerSize = rsnSystemGetPointerSize();
+        } catch (UnsatisfiedLinkError e) {
+            Log.e(LOG_TAG, "Error loading RS jni library: " + e);
+            throw new RSRuntimeException("Error loading RS jni library: " + e);
+        }
+    }
+
+    private static boolean shouldInitializeNativeBridgeRuntime(Context ctx) {
+        return "libberberis_arm64.so".equals(
+                        SystemProperties.get("ro.dalvik.vm.native.bridge"))
+                && ctx != null
+                && ctx.getApplicationInfo() != null
+                && "arm64-v8a".equals(ctx.getApplicationInfo().primaryCpuAbi);
+    }
+
     /*
      * Context creation flag that specifies a normal context.
     */
@@ -115,26 +171,7 @@ public class RenderScript {
     static {
         sInitialized = false;
         if (!SystemProperties.getBoolean("config.disable_renderscript", false)) {
-            try {
-                Class<?> vm_runtime = Class.forName("dalvik.system.VMRuntime");
-                Method get_runtime = vm_runtime.getDeclaredMethod("getRuntime");
-                sRuntime = get_runtime.invoke(null);
-                registerNativeAllocation =
-                        vm_runtime.getDeclaredMethod("registerNativeAllocation", Long.TYPE);
-                registerNativeFree = vm_runtime.getDeclaredMethod("registerNativeFree", Long.TYPE);
-            } catch (Exception e) {
-                Log.e(LOG_TAG, "Error loading GC methods: " + e);
-                throw new RSRuntimeException("Error loading GC methods: " + e);
-            }
-            try {
-                System.loadLibrary("rs_jni");
-                _nInit();
-                sInitialized = true;
-                sPointerSize = rsnSystemGetPointerSize();
-            } catch (UnsatisfiedLinkError e) {
-                Log.e(LOG_TAG, "Error loading RS jni library: " + e);
-                throw new RSRuntimeException("Error loading RS jni library: " + e);
-            }
+            initializeRuntime(null, null);
         }
     }
 
@@ -1407,6 +1444,9 @@ public class RenderScript {
      * @return RenderScript
      */
     private static RenderScript internalCreate(Context ctx, int sdkVersion, ContextType ct, int flags) {
+        if (!sInitialized && shouldInitializeNativeBridgeRuntime(ctx)) {
+            initializeRuntime("librs_jni.so", ctx.getClassLoader());
+        }
         if (!sInitialized) {
             Log.e(LOG_TAG, "RenderScript.create() called when disabled; someone is likely to crash");
             return null;
