@@ -7870,6 +7870,7 @@ public final class ActivityThread extends ClientTransactionHandler
                                                 data.appInfo.packageName,
                                                 UserHandle.myUserId());
         VMRuntime.setProcessPackageName(data.appInfo.packageName);
+        com.android.internal.util.WaydroidAppCompat.apply(data.appInfo.packageName);
         mDdmSyncStageUpdater.next(Stage.Named);
 
         // Pass data directory path to ART. This is used for caching information and
